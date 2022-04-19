@@ -16,26 +16,13 @@ from torch.utils.data import TensorDataset, DataLoader
 
 import gym
 
+from code4.envs.fdtd_env import FdtdEnv
 from environments import RewEnv
 from models import RewNet, MLPActorCritic
 from environments import FdtdEnv2
 from arguments import get_args
 from buffers import PPOBuffer, RewNetBuffer
 from algos.PPO import PPO
-# from code4.envs.fdtd_env import FdtdEnv
-
-# env1 = gym.make('HalfCheetah-v2')
-# env1 = gym.make('CartPole-v1')
-# obs_dim = env1.observation_space.shape[0] or env1.observation_space.n
-# o1 = env1.reset()
-# print(obs_dim, o1)
-# reward_net = RewNN(obs_dim, hidden_sizes=[32, 32])
-# env2 = RewEnv(env1, reward_net)
-# o2 = env1.reset()
-# print(o2)
-
-
-
 
 
 def main():
