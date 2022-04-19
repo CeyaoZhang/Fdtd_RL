@@ -17,20 +17,10 @@ from torch.utils.data import TensorDataset, DataLoader
 # from torchvision.utils.data import 
 
 import gym
+from code4.envs.fdtd_env import FdtdEnv
 from environments import RewEnv
 from cores import RewNN, MLPActorCritic
 from environments import FdtdEnv2
-# from code4.envs.fdtd_env import FdtdEnv
-
-# env1 = gym.make('HalfCheetah-v2')
-# env1 = gym.make('CartPole-v1')
-# obs_dim = env1.observation_space.shape[0] or env1.observation_space.n
-# o1 = env1.reset()
-# print(obs_dim, o1)
-# reward_net = RewNN(obs_dim, hidden_sizes=[32, 32])
-# env2 = RewEnv(env1, reward_net)
-# o2 = env1.reset()
-# print(o2)
 
 
 class PPOBuffer:
@@ -95,7 +85,7 @@ class PPOBuffer:
 
     def get(self):
         """
-        Call this at the end of an epoch to get all of the data from
+        Call this at the end of an episode to get all of the data from
         the buffer, with advantages appropriately normalized (shifted to have
         mean zero and std one). Also, resets some pointers in the buffer.
         """
@@ -149,44 +139,47 @@ class RewNetBuffer:
 def main(args):
 
     max_steps=int(args.max_steps)
-    steps_per_rollout=args.steps_per_rollout
+    steps_per_episode=args.steps_per_episode
     use_cuda = args.use_cuda
 
-    gamma=0.99
-    lam=0.97
+    gamma=args.gamma
+    lam=args.lam
     clip_ratio=0.2
     target_kl=0.01
 
     pi_lr=3e-4
     vf_lr=1e-3
-    rewNN_lr = 1e-3
+    rewNet_lr = 1e-3
 
-    train_pi_iters=8
-    train_v_iters=8 
+    train_pi_iters=1
+    train_v_iters=5
 
-    max_rewNN_len=1000
-    batch_size = 40
-    rewNet_epochs = 20
+    rewNet_max_len = args.rewNet_max_len
+    rewNet_batch_size = args.rewNet_batch_size
+    rewNet_episodes = args.rewNet_episodes
     
+    def set_seed(seed):
+        # Random seed
+        import random 
+        seed = args.seed
+        random.seed(seed)
+        np.random.seed(seed)
 
-    # Random seed
-    import random 
-    seed = args.seed
-    random.seed(seed)
-    np.random.seed(seed)
+        use_cuda = args.use_cuda
+        if torch.cuda.is_available() and use_cuda:
+            print("\ncuda is available! with %d gpus\n"%torch.cuda.device_count())
+            torch.cuda.manual_seed(seed)
+            torch.manual_seed(seed)
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+            device = torch.device("cuda")
+        else:
+            print("\ncuda is not available! cpu is available!\n")
+            torch.manual_seed(seed)
+            device = torch.device("cpu")
+        return device
 
-    use_cuda = args.use_cuda
-    if torch.cuda.is_available() and use_cuda:
-        print("\ncuda is available! with %d gpus\n"%torch.cuda.device_count())
-        torch.cuda.manual_seed(seed)
-        torch.manual_seed(seed)
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
-        device = torch.device("cuda")
-    else:
-        print("\ncuda is not available! cpu is available!\n")
-        torch.manual_seed(seed)
-        device = torch.device("cpu")
+    device = set_seed(args.seed)
 
     
     # Instantiate environment
@@ -208,11 +201,11 @@ def main(args):
     pi_optimizer = Adam(policy.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(policy.v.parameters(), lr=vf_lr)
     rewNet_loss_fn = nn.MSELoss()
-    rewNet_optimizer = SGD(reward_net.parameters(), lr=rewNN_lr)
+    rewNet_optimizer = SGD(reward_net.parameters(), lr=rewNet_lr)
 
     # Set up experience buffer
-    buf = PPOBuffer(obs_dim, act_dim, steps_per_rollout, gamma, lam, device)
-    rewNet_buf = RewNetBuffer(max_rewNN_len, device)
+    buf = PPOBuffer(obs_dim, act_dim, steps_per_episode, gamma, lam, device)
+    rewNet_buf = RewNetBuffer(rewNet_max_len, device)
 
     
 
@@ -222,11 +215,11 @@ def main(args):
         ys = data['rew']
         
         dataset = TensorDataset(Xs, ys)  
-        data_loader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True)
+        data_loader = DataLoader(dataset=dataset, batch_size=rewNet_batch_size, shuffle=True)
 
         reward_net.train()
-        for t in range(rewNet_epochs):
-            print(f"Epoch {t+1}\n-------------------------------")
+        for t in range(rewNet_episodes):
+            print(f"episode {t+1}\n-------------------------------")
             
             for j, (X, y) in enumerate(data_loader):
                 # X, y = X.to(device), y.to(device)
@@ -288,7 +281,7 @@ def main(args):
 
     def env_interact(obs, env, use_rewNet_flag=False):
 
-        for t in range(steps_per_rollout):
+        for t in range(steps_per_episode):
 
             a, v, logp = policy.step(torch.as_tensor(obs, dtype=torch.float32, device=device))
             next_o, r, d, _ = env.step(a)
@@ -300,9 +293,9 @@ def main(args):
 
             obs = next_o
 
-            rollout_full = (t+1)==steps_per_rollout
-            if d or rollout_full:
-                if rollout_full:
+            episode_full = (t+1)==steps_per_episode
+            if d or episode_full:
+                if episode_full:
                     _, v, _ = policy.step(torch.as_tensor(obs, dtype=torch.float32, device=device))
                 else:
                     v = 0.
@@ -320,13 +313,14 @@ def main(args):
     o = env1.reset()
 
     import math
-    epochs = math.ceil(max_steps/ steps_per_rollout)
-    for epoch in trange(epochs):
+    episodes = math.ceil(max_steps/ steps_per_episode)
+    for episode in trange(episodes):
 
-        if epoch < 100:
+        if episode < 100:
             o = env_interact(o, env1)
         else:
-            if epoch%10 == 0:
+            if episode%10 == 0:
+                o = env1.reset()
                 o = env_interact(o, env1)
                 update_rewNet()
             else:
@@ -344,22 +338,20 @@ def main(args):
 if __name__ == '__main__':
 
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
-
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--lam', type=float, default=0.95)
-    
-    
-    parser.add_argument('--steps_per_epoch', '-spe', type=int, default=64)
-    # parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--max_steps', type=int, default=int(4e5))
+    parser = argparse.ArgumentParser(description='This is PPO+RewNetSimulator hyper-parameters')
 
     parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--use_cuda', type=int, default=0, choices=[0, 1])
+    parser.add_argument('--use_cuda', type=int, default=0, choices=[0, 1], help='0 for CPU and 1 for CUDA')
+
+    parser.add_argument('--gamma', type=float, default=0.99, help='discount factor in RL')
+    parser.add_argument('--lam', type=float, default=0.95, help='GAE-Lambda')
+    
+    parser.add_argument('--max_steps', type=int, default=int(4e5))
+    parser.add_argument('--steps_per_episode', type=int, default=200)
+    
+    parser.add_argument('--rewNet_maxlen', type=int, default=1000, help='max len for the rewNet buffer')
+    parser.add_argument('--rewNet_batch_size', type=int, default=20, help='batch size for training the rewNet')
+    parser.add_argument('--rewNet_epochs', type=int, default=20, help='epochs for training the rewNet')
 
     args = parser.parse_args()
     print(args)
