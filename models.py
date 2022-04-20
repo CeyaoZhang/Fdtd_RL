@@ -15,7 +15,7 @@ def mlp(sizes, activation=nn.ReLU, output_activation=nn.Identity):
     return nn.Sequential(*layers)
 
 
-class RewNN(nn.Module):
+class RewNet(nn.Module):
 
     def __init__(self, obs_dim, hidden_sizes):
         super().__init__()

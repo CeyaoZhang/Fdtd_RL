@@ -1,5 +1,3 @@
-from inspect import ArgSpec
-
 import os
 from time import time
 from datetime import datetime
@@ -12,14 +10,13 @@ import scipy.signal
 import torch
 import torch.nn as nn
 from torch.optim import SGD, Adam
-
 from torch.utils.data import TensorDataset, DataLoader
 # from torchvision.utils.data import 
 
 import gym
 from code4.envs.fdtd_env import FdtdEnv
 from environments import RewEnv
-from cores import RewNN, MLPActorCritic
+from models import RewNet, MLPActorCritic
 from environments import FdtdEnv2
 
 
@@ -191,7 +188,7 @@ def main(args):
 
     # Create actor-critic module
     policy = MLPActorCritic(env1.observation_space, env1.action_space, hidden_sizes=[256,256])
-    reward_net = RewNN(obs_dim, hidden_sizes=[32, 32])
+    reward_net = RewNet(obs_dim, hidden_sizes=[32, 32])
     if torch.cuda.is_available() and use_cuda:
         policy.cuda()
         reward_net.cuda() 
