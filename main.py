@@ -24,46 +24,38 @@ from arguments import get_args
 from buffers import PPOBuffer, RewNetBuffer
 from algos.PPO import PPO
 
+def set_seed(args):
+    # Random seed
+    import random 
+
+    seed = args.seed
+    random.seed(seed)
+    np.random.seed(seed)
+
+    use_cuda = args.use_cuda
+    if torch.cuda.is_available() and use_cuda:
+        print("\ncuda is available! with %d gpus\n"%torch.cuda.device_count())
+        torch.cuda.manual_seed(seed)
+        torch.manual_seed(seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        device = torch.device("cuda")
+    else:
+        print("\ncuda is not available! cpu is available!\n")
+        torch.manual_seed(seed)
+        device = torch.device("cpu")
+    return device
 
 def main():
 
     args = get_args()
     print(args)
 
-    max_steps=int(args.max_steps) 
-    steps_per_episode=args.steps_per_episode 
-    use_cuda = args.use_cuda
-
-    gamma=args.gamma
-    lam=args.lam
-
-    rewNet_lr=1e-3
-    rewNet_maxlen = args.rewNet_maxlen
-    rewNet_batch_size = args.rewNet_batch_size
-    rewNet_epochs = args.rewNet_epochs
+    device = set_seed(args)
     
-    def set_seed(seed):
-        # Random seed
-        import random 
-        seed = args.seed
-        random.seed(seed)
-        np.random.seed(seed)
-
-        use_cuda = args.use_cuda
-        if torch.cuda.is_available() and use_cuda:
-            print("\ncuda is available! with %d gpus\n"%torch.cuda.device_count())
-            torch.cuda.manual_seed(seed)
-            torch.manual_seed(seed)
-            torch.backends.cudnn.benchmark = False
-            torch.backends.cudnn.deterministic = True
-            device = torch.device("cuda")
-        else:
-            print("\ncuda is not available! cpu is available!\n")
-            torch.manual_seed(seed)
-            device = torch.device("cpu")
-        return device
-
-    device = set_seed(args.seed)
+    steps_per_episode=args.steps_per_episode 
+    
+    
 
     # Instantiate environment
     env1 = gym.make("FdtdEnv")   
@@ -74,18 +66,18 @@ def main():
     # Create actor-critic module
     ac_net = MLPActorCritic(env1.observation_space, env1.action_space, hidden_sizes=[256,256])
     reward_net = RewNet(obs_dim, hidden_sizes=[32, 32])
-    if torch.cuda.is_available() and use_cuda:
+    if torch.cuda.is_available() and args.use_cuda:
         ac_net.cuda()
         reward_net.cuda() 
-    agent = PPO(ac_net)
+    agent = PPO(ac_net, pi_lr=args.pi_lr, vf_lr=args.vf_lr, clip_ratio=args.clip_ratio, target_kl=args.target_kl, train_pi_iters=args.train_pi_iters, train_v_iters=args.train_v_iters)
 
     
     rewNet_loss_fn = nn.MSELoss()
-    rewNet_optimizer = SGD(reward_net.parameters(), lr=rewNet_lr)
+    rewNet_optimizer = SGD(reward_net.parameters(), lr=args.rewNet_lr)
 
     # Set up experience buffer
-    buf = PPOBuffer(obs_dim, act_dim, steps_per_episode, gamma, lam, device)
-    rewNet_buf = RewNetBuffer(rewNet_maxlen, device)
+    buf = PPOBuffer(obs_dim, act_dim, steps_per_episode, args.gamma, args.lam, device)
+    rewNet_buf = RewNetBuffer(args.rewNet_maxlen, device)
 
 
     def update_rewNet():
@@ -94,10 +86,10 @@ def main():
         ys = data['rew']
         
         dataset = TensorDataset(Xs, ys)  
-        data_loader = DataLoader(dataset=dataset, batch_size=rewNet_batch_size, shuffle=True)
+        data_loader = DataLoader(dataset=dataset, batch_size=args.rewNet_batch_size, shuffle=True)
 
         reward_net.train()
-        for t in range(rewNet_epochs):
+        for t in range(args.rewNet_epochs):
             print(f"Epoch {t+1}\n-------------------------------")
             
             for j, (X, y) in enumerate(data_loader):
@@ -143,13 +135,14 @@ def main():
     o = env1.reset()
 
     import math
-    episodes = math.ceil(max_steps / steps_per_episode)
+    episodes = math.ceil(args.max_steps / steps_per_episode)
     for episode in trange(episodes):
 
-        if episode < 100:
+        # interact with env
+        if episode < args.update_before:
             o = env_interact(o, env1)
         else:
-            if episode%10 == 0:
+            if episode % args.update_every == 0:
                 o = env1.reset()
                 o = env_interact(o, env1)
                 update_rewNet()
@@ -160,6 +153,14 @@ def main():
 
         # Perform PPO update!
         agent.update_policy(buf)
+
+        # save the model
+        if episode % args.save_every == 0:
+            if episode < args.update_before:
+                PATH = "pretrain.pt"
+            else:
+                PATH = 'model.pt'
+            torch.save(ac_net.state_dict(), PATH)
 
     end_time = time()
     print('\n Time: %.3f\n'%(end_time-start_time))
