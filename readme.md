@@ -1,3 +1,3 @@
 ```
-python Fdtd_ppo --max_steps 100000 --steps_per_episode 200 
+Updated FDTD_PPO.py to incorporate the actual FDTD environment. 
 ```
